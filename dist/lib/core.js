@@ -17,13 +17,18 @@ var globalScope = globalThis;
 //====================================================================
 
 class ElementCollection {
-	constructor(css, relativeToElement) {
+	constructor(css, relativeToElement, escape) {
 		this._css = css;
 		this.relativeToElement = relativeToElement;
+		this.escape = escape;
 	}
 
 	get css() {
-		return _runtime.escapeSelector(this._css);
+		if (this.escape) {
+			return _runtime.escapeSelector(this._css);
+		} else {
+			return this._css;
+		}
 	}
 
 	get className() {
@@ -43,10 +48,18 @@ class ElementCollection {
 		return false;
 	}
 
+	get length() {
+		return this.selectMatches().length;
+	}
+
 	[Symbol.iterator]() {
-		return _runtime.getRootNode(this.relativeToElement)
-			.querySelectorAll(this.css)
-			[Symbol.iterator]();
+		let query = this.selectMatches();
+		return query [Symbol.iterator]();
+	}
+
+	selectMatches() {
+		let query = _runtime.getRootNode(this.relativeToElement).querySelectorAll(this.css);
+		return query;
 	}
 }
 
@@ -795,6 +808,9 @@ var _lexer = (function () {
 				isAlpha(lastToken) ||
 				isNumeric(lastToken) ||
 				lastToken === ")" ||
+				lastToken === "\"" ||
+				lastToken === "'" ||
+				lastToken === "`" ||
 				lastToken === "}" ||
 				lastToken === "]"
 			);
@@ -948,6 +964,7 @@ var _parser = (function () {
 		var featureDefinitionWrapper = function (parser, runtime, tokens) {
 			var featureElement = definition(parser, runtime, tokens);
 			if (featureElement) {
+				featureElement.isFeature = true;
 				featureElement.keyword = keyword;
 				featureElement.type = featureGrammarType;
 				return featureElement;
@@ -1123,8 +1140,12 @@ var _parser = (function () {
 	 * @param {GrammarElement} parent
 	 */
 	function setParent(elt, parent) {
-		if (elt) {
+		if (typeof elt === 'object') {
 			elt.parent = parent;
+			if (typeof parent === 'object') {
+				parent.children = (parent.children || new Set());
+				parent.children.add(elt)
+			}
 			setParent(elt.next, parent);
 		}
 	}
@@ -1194,23 +1215,47 @@ var _parser = (function () {
 		return returnArr;
 	}
 
+	function ensureTerminated(commandList) {
+		var implicitReturn = {
+			type: "implicitReturn",
+			op: function (context) {
+				context.meta.returned = true;
+				if (context.meta.resolve) {
+					context.meta.resolve();
+				}
+				return _runtime.HALT;
+			},
+			execute: function (ctx) {
+				// do nothing
+			},
+		};
+
+		var end = commandList;
+		while (end.next) {
+			end = end.next;
+		}
+		end.next = implicitReturn;
+	}
+
+
 	// parser API
 	return {
-		setParent: setParent,
-		requireElement: requireElement,
-		parseElement: parseElement,
-		featureStart: featureStart,
-		commandStart: commandStart,
-		commandBoundary: commandBoundary,
-		parseAnyOf: parseAnyOf,
-		parseHyperScript: parseHyperScript,
-		raiseParseError: raiseParseError,
-		addGrammarElement: addGrammarElement,
-		addCommand: addCommand,
-		addFeature: addFeature,
-		addLeafExpression: addLeafExpression,
-		addIndirectExpression: addIndirectExpression,
-		parseStringTemplate: parseStringTemplate,
+		setParent,
+		requireElement,
+		parseElement,
+		featureStart,
+		commandStart,
+		commandBoundary,
+		parseAnyOf,
+		parseHyperScript,
+		raiseParseError,
+		addGrammarElement,
+		addCommand,
+		addFeature,
+		addLeafExpression,
+		addIndirectExpression,
+		parseStringTemplate,
+		ensureTerminated,
 	};
 })();
 
@@ -1219,7 +1264,16 @@ var _parser = (function () {
 //====================================================================
 
 var CONVERSIONS = {
-	dynamicResolvers: /** @type DynamicConversionFunction[] */ [],
+	dynamicResolvers: /** @type DynamicConversionFunction[] */ [
+		function(str, value){
+			if (str === "Fixed") {
+				return Number(value).toFixed();
+			} else if (str.indexOf("Fixed:") === 0) {
+				let num = str.split(":")[1];
+				return Number(value).toFixed(parseInt(num));
+			}
+		}
+	],
 	String: function (val) {
 		if (val.toString) {
 			return val.toString();
@@ -1234,7 +1288,6 @@ var CONVERSIONS = {
 		return parseFloat(val);
 	},
 	Number: function (val) {
-		console.log(val);
 		return Number(val);
 	},
 	Date: function (val) {
@@ -1319,7 +1372,8 @@ var _runtime = (function () {
 	 * @returns {value is Array | NodeList}
 	 */
 	function isArrayLike(value) {
-		return Array.isArray(value) || (typeof NodeList !== 'undefined' && value instanceof NodeList);
+		return Array.isArray(value) ||
+			(typeof NodeList !== 'undefined' && (value instanceof NodeList || value instanceof HTMLCollection));
 	}
 
 	/**
@@ -1347,7 +1401,8 @@ var _runtime = (function () {
 	 * @returns {value is any[] | NodeList | ElementCollection}
 	 */
 	function shouldAutoIterate(value) {
-		return value instanceof ElementCollection || isArrayLike(value);
+		return  value instanceof ElementCollection ||
+			   isArrayLike(value);
 	}
 
 	/**
@@ -1459,17 +1514,20 @@ var _runtime = (function () {
 			try {
 				var next = unifiedEval(command, ctx);
 			} catch (e) {
-				_runtime.registerHyperTrace(ctx, e);
-				if (ctx.meta.errorHandler && !ctx.meta.handlingError) {
-					ctx.meta.handlingError = true;
-					ctx[ctx.meta.errorSymmbol] = e;
-					command = ctx.meta.errorHandler;
-					continue;
-				} else if (ctx.meta.reject) {
-					ctx.meta.reject(e);
+				if (ctx.meta.handlingFinally) {
+					console.error(" Exception in finally block: ", e);
 					next = HALT;
 				} else {
-					throw e;
+					_runtime.registerHyperTrace(ctx, e);
+					if (ctx.meta.errorHandler && !ctx.meta.handlingError) {
+						ctx.meta.handlingError = true;
+						ctx[ctx.meta.errorSymbol] = e;
+						command = ctx.meta.errorHandler;
+						continue;
+					} else  {
+						ctx.meta.currentException = e;
+						next = HALT;
+					}
 				}
 			}
 			if (next == null) {
@@ -1479,21 +1537,32 @@ var _runtime = (function () {
 				next.then(function (resolvedNext) {
 					unifiedExec(resolvedNext, ctx);
 				}).catch(function (reason) {
-					_runtime.registerHyperTrace(ctx, reason);
-					if (ctx.meta.errorHandler && !ctx.meta.handlingError) {
-						ctx.meta.handlingError = true;
-						ctx[ctx.meta.errorSymmbol] = reason;
-						unifiedExec(ctx.meta.errorHandler, ctx);
-					} else if (ctx.meta.reject) {
-						ctx.meta.reject(reason);
-					} else {
-						throw reason;
-					}
+					unifiedExec({ // Anonymous command to simply throw the exception
+						op: function(){
+							throw reason;
+						}
+					}, ctx);
 				});
 				return;
 			} else if (next === HALT) {
-				// done
-				return;
+				if (ctx.meta.finallyHandler && !ctx.meta.handlingFinally) {
+					ctx.meta.handlingFinally = true;
+					command = ctx.meta.finallyHandler;
+				} else {
+					if (ctx.meta.onHalt) {
+						ctx.meta.onHalt();
+					}
+					if (ctx.meta.currentException) {
+						if (ctx.meta.reject) {
+							ctx.meta.reject(ctx.meta.currentException);
+							return;
+						} else {
+							throw ctx.meta.currentException;
+						}
+					} else {
+						return;
+					}
+				}
 			} else {
 				command = next; // move to the next command
 			}
@@ -1563,15 +1632,7 @@ var _runtime = (function () {
 						}
 					})
 					.catch(function (reason) {
-						if (ctx.meta.errorHandler && !ctx.meta.handlingError) {
-							ctx.meta.handlingError = true;
-							ctx[ctx.meta.errorSymmbol] = reason;
-							unifiedExec(ctx.meta.errorHandler, ctx);
-						} else if (ctx.meta.reject) {
-							ctx.meta.reject(reason);
-						} else {
-							// TODO: no meta context to reject with, trigger event?
-						}
+						reject(reason);
 					});
 			});
 		} else {
@@ -2092,7 +2153,7 @@ var _runtime = (function () {
 	*/
 	function nullCheck(value, elt) {
 		if (value == null) {
-			throw new Error(elt.sourceFor() + " is null");
+			throw new Error("'" + elt.sourceFor() + "' is null");
 		}
 	}
 
@@ -2105,13 +2166,46 @@ var _runtime = (function () {
 	}
 
 	/**
+	* @param {any} value
+	* @returns {boolean}
+	*/
+	function doesExist(value) {
+		if(value == null){
+			return false;
+		}
+		if (shouldAutoIterate(value)) {
+			for (const elt of value) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
 	* @param {Node} node
 	* @returns {Document|ShadowRoot}
 	*/
 	function getRootNode(node) {
-		var rv = node.getRootNode();
-		if (rv instanceof Document || rv instanceof ShadowRoot) return rv;
-		else return document;
+		if (node && node instanceof Node) {
+			var rv = node.getRootNode();
+			if (rv instanceof Document || rv instanceof ShadowRoot) return rv;
+		}
+		return document;
+	}
+
+	function getEventQueueFor(elt, onFeature) {
+		let internalData = getInternalData(elt);
+		var eventQueuesForElt = internalData.eventQueues;
+		if (eventQueuesForElt == null) {
+			eventQueuesForElt = new Map();
+			internalData.eventQueues = eventQueuesForElt;
+		}
+		var eventQueueForFeature = eventQueuesForElt.get(onFeature);
+		if (eventQueueForFeature == null) {
+			eventQueueForFeature = {queue:[], executing:false};
+			eventQueuesForElt.set(onFeature, eventQueueForFeature);
+		}
+		return eventQueueForFeature;
 	}
 
 	/** @type string | null */
@@ -2147,7 +2241,9 @@ var _runtime = (function () {
 		escapeSelector,
 		nullCheck,
 		isEmpty,
+		doesExist,
 		getRootNode,
+		getEventQueueFor,
 		hyperscriptUrl,
 		HALT,
 	};
@@ -2286,7 +2382,7 @@ var _runtime = (function () {
 				type: "classRefTemplate",
 				args: [innerExpression],
 				op: function (context, arg) {
-					return new ElementCollection("." + arg, context.me)
+					return new ElementCollection("." + arg, context.me, true)
 				},
 				evaluate: function (context) {
 					return runtime.unifiedEval(this, context);
@@ -2298,7 +2394,7 @@ var _runtime = (function () {
 				type: "classRef",
 				css: css,
 				evaluate: function (context) {
-					return new ElementCollection(css, context.me)
+					return new ElementCollection(css, context.me, true)
 				},
 			};
 		}
@@ -2778,15 +2874,15 @@ var _runtime = (function () {
 			op: function (context, rootVal, target) {
 				var returnArr = [];
 				if (query) {
-					runtime.forEach(target, function (targetElt) {
+					runtime.implicitLoop(target, function (targetElt) {
 						var results = targetElt.querySelectorAll(root.css);
 						for (var i = 0; i < results.length; i++) {
 							returnArr.push(results[i]);
 						}
 					});
 				} else {
-					runtime.forEach(rootVal, function (rootElt) {
-						runtime.forEach(target, function (targetElt) {
+					runtime.implicitLoop(rootVal, function (rootElt) {
+						runtime.implicitLoop(target, function (targetElt) {
 							if (rootElt === targetElt) {
 								returnArr.push(rootElt);
 							}
@@ -2999,6 +3095,22 @@ var _runtime = (function () {
 				return runtime.isEmpty(val);
 			},
 			evaluate: function (context) {
+				return runtime.unifiedEval(this, context);
+			},
+		};
+	});
+
+	_parser.addLeafExpression("some", function (parser, runtime, tokens) {
+		if (!tokens.matchToken("some")) return;
+		var root = parser.requireElement("expression", tokens);
+		return {
+			type: "noExpression",
+			root: root,
+			args: [root],
+			op: function (_context, val) {
+				return !runtime.isEmpty(val);
+			},
+			evaluate(context) {
 				return runtime.unifiedEval(this, context);
 			},
 		};
@@ -3305,6 +3417,9 @@ var _runtime = (function () {
 				} else {
 					operator = "==";
 				}
+			} else if (tokens.matchToken("exist") || tokens.matchToken("exists")) {
+				operator = "exist";
+				hasRightValue = false;
 			} else if (tokens.matchToken("matches") || tokens.matchToken("match")) {
 				operator = "match";
 			} else if (tokens.matchToken("contains") || tokens.matchToken("contain")) {
@@ -3317,6 +3432,9 @@ var _runtime = (function () {
 					operator = "not match";
 				} else if (tokens.matchToken("contains") || tokens.matchToken("contain")) {
 					operator = "not contain";
+				} else if (tokens.matchToken("exist") || tokens.matchToken("exist")) {
+					operator = "not exist";
+					hasRightValue = false;
 				} else if (tokens.matchToken("include")) {
 					operator = "not include";
 				} else {
@@ -3391,6 +3509,10 @@ var _runtime = (function () {
 						return runtime.isEmpty(lhsVal);
 					} else if (operator === "not empty") {
 						return !runtime.isEmpty(lhsVal);
+					} else if (operator === "exist") {
+						return runtime.doesExist(lhsVal);
+					} else if (operator === "not exist") {
+						return !runtime.doesExist(lhsVal);
 					} else if (operator === "a") {
 						return runtime.typeCheck(lhsVal, typeName.value, nullOk);
 					} else if (operator === "not a") {
@@ -3685,7 +3807,6 @@ var _runtime = (function () {
 			});
 		} while (tokens.matchToken("or"));
 
-		var queue = [];
 		var queueLast = true;
 		if (!every) {
 			if (tokens.matchToken("queue")) {
@@ -3702,31 +3823,18 @@ var _runtime = (function () {
 			}
 		}
 
-		var commandList = parser.parseElement("commandList", tokens);
+		var start = parser.requireElement("commandList", tokens);
+		parser.ensureTerminated(start);
 
-		var implicitReturn = {
-			type: "implicitReturn",
-			op: function (context) {
-				// automatically resolve at the end of an event handler if nothing else does
-				context.meta.resolve();
-				return runtime.HALT;
-			},
-			execute: function (ctx) {
-				// do nothing
-			},
-		};
+		if (tokens.matchToken("catch")) {
+			var errorSymbol = tokens.requireTokenType("IDENTIFIER").value;
+			var errorHandler = parser.requireElement("commandList", tokens);
+			parser.ensureTerminated(errorHandler);
+		}
 
-		if (commandList) {
-			/** @type {GrammarElement} */
-			var start = commandList;
-
-			var end = start;
-			while (end.next) {
-				end = end.next;
-			}
-			end.next = implicitReturn;
-		} else {
-			start = implicitReturn;
+		if (tokens.matchToken("finally")) {
+			var finallyHandler = parser.requireElement("commandList", tokens);
+			parser.ensureTerminated(finallyHandler);
 		}
 
 		var onFeature = {
@@ -3734,25 +3842,26 @@ var _runtime = (function () {
 			events: events,
 			start: start,
 			every: every,
-			executing: false,
 			execCount: 0,
-			queue: queue,
+			errorHandler: errorHandler,
+			errorSymbol: errorSymbol,
 			execute: function (/** @type {Context} */ ctx) {
-				if (this.executing && every === false) {
-					if (queueNone || (queueFirst && queue.length > 0)) {
+				let eventQueueInfo = runtime.getEventQueueFor(ctx.me, onFeature);
+				if (eventQueueInfo.executing && every === false) {
+					if (queueNone || (queueFirst && eventQueueInfo.queue.length > 0)) {
 						return;
 					}
 					if (queueLast) {
-						onFeature.queue.length = 0;
+						eventQueueInfo.queue.length = 0;
 					}
-					onFeature.queue.push(ctx);
+					eventQueueInfo.queue.push(ctx);
 					return;
 				}
 				onFeature.execCount++;
-				this.executing = true;
-				ctx.meta.resolve = function () {
-					onFeature.executing = false;
-					var queued = onFeature.queue.shift();
+				eventQueueInfo.executing = true;
+				ctx.meta.onHalt = function () {
+					eventQueueInfo.executing = false;
+					var queued = eventQueueInfo.queue.shift();
 					if (queued) {
 						setTimeout(function () {
 							onFeature.execute(queued);
@@ -3768,13 +3877,6 @@ var _runtime = (function () {
 					runtime.triggerEvent(ctx.me, "exception", {
 						error: err,
 					});
-					onFeature.executing = false;
-					var queued = onFeature.queue.shift();
-					if (queued) {
-						setTimeout(function () {
-							onFeature.execute(queued);
-						}, 1);
-					}
 				};
 				start.execute(ctx);
 			},
@@ -3795,7 +3897,6 @@ var _runtime = (function () {
 						if (eventSpec.mutationSpec) {
 							eventName = "hyperscript:mutation";
 							const observer = new MutationObserver(function (mutationList, observer) {
-								console.log(target, mutationList);
 								if (!onFeature.executing) {
 									_runtime.triggerEvent(target, eventName, {
 										mutationList: mutationList,
@@ -3842,6 +3943,11 @@ var _runtime = (function () {
 								ctx[arg.value] =
 									ctx.event[arg.value] || ('detail' in ctx.event ? ctx.event['detail'][arg.value] : null);
 							}
+
+							// install error handler if any
+							ctx.meta.errorHandler = errorHandler;
+							ctx.meta.errorSymbol = errorSymbol;
+							ctx.meta.finallyHandler = finallyHandler;
 
 							// apply filter
 							if (eventSpec.filter) {
@@ -3947,10 +4053,17 @@ var _runtime = (function () {
 		}
 
 		var start = parser.requireElement("commandList", tokens);
+
 		if (tokens.matchToken("catch")) {
 			var errorSymbol = tokens.requireTokenType("IDENTIFIER").value;
 			var errorHandler = parser.parseElement("commandList", tokens);
 		}
+
+		if (tokens.matchToken("finally")) {
+			var finallyHandler = parser.requireElement("commandList", tokens);
+			parser.ensureTerminated(finallyHandler);
+		}
+
 		var functionFeature = {
 			displayName:
 				funcName +
@@ -3966,6 +4079,7 @@ var _runtime = (function () {
 			start: start,
 			errorHandler: errorHandler,
 			errorSymbol: errorSymbol,
+			finallyHandler: finallyHandler,
 			install: function (target, source) {
 				var func = function () {
 					// null, worker
@@ -3973,7 +4087,8 @@ var _runtime = (function () {
 
 					// install error handler if any
 					ctx.meta.errorHandler = errorHandler;
-					ctx.meta.errorSymmbol = errorSymbol;
+					ctx.meta.errorSymbol = errorSymbol;
+					ctx.meta.finallyHandler = finallyHandler;
 
 					for (var i = 0; i < args.length; i++) {
 						var name = args[i];
@@ -4007,38 +4122,11 @@ var _runtime = (function () {
 			},
 		};
 
-		var implicitReturn = {
-			type: "implicitReturn",
-			op: function (context) {
-				// automatically return at the end of the function if nothing else does
-				context.meta.returned = true;
-				if (context.meta.resolve) {
-					context.meta.resolve();
-				}
-				return runtime.HALT;
-			},
-			execute: function (context) {
-				// do nothing
-			},
-		};
-		// terminate body
-		if (start) {
-			var end = start;
-			while (end.next) {
-				end = end.next;
-			}
-			end.next = implicitReturn;
-		} else {
-			functionFeature.start = implicitReturn;
-		}
+		parser.ensureTerminated(start);
 
-		// terminate error handler
+		// terminate error handler if any
 		if (errorHandler) {
-			var end = errorHandler;
-			while (end.next) {
-				end = end.next;
-			}
-			end.next = implicitReturn;
+			parser.ensureTerminated(errorHandler);
 		}
 
 		parser.setParent(start, functionFeature);
@@ -4047,16 +4135,6 @@ var _runtime = (function () {
 
 	_parser.addFeature("set", function (parser, runtime, tokens) {
 		let setCmd = parser.parseElement("setCommand", tokens);
-
-		var implicitReturn = {
-			type: "implicitReturn",
-			op: function (context) {
-				return runtime.HALT;
-			},
-			execute: function (context) {
-			},
-		};
-
 		if (setCmd) {
 			if (setCmd.target.scope !== "element") {
 				parser.raiseParseError(tokens, "variables declared at the feature level must be element scoped.");
@@ -4067,7 +4145,7 @@ var _runtime = (function () {
 					setCmd && setCmd.execute(runtime.makeContext(target, setFeature, target, null));
 				},
 			};
-			setCmd.next = implicitReturn;
+			parser.ensureTerminated(setCmd);
 			return setFeature;
 		}
 	});
@@ -4075,7 +4153,7 @@ var _runtime = (function () {
 	_parser.addFeature("init", function (parser, runtime, tokens) {
 		if (!tokens.matchToken("init")) return;
 
-		var start = parser.parseElement("commandList", tokens);
+		var start = parser.requireElement("commandList", tokens);
 		var initFeature = {
 			start: start,
 			install: function (target, source) {
@@ -4085,25 +4163,8 @@ var _runtime = (function () {
 			},
 		};
 
-		var implicitReturn = {
-			type: "implicitReturn",
-			op: function (context) {
-				return runtime.HALT;
-			},
-			execute: function (context) {
-				// do nothing
-			},
-		};
 		// terminate body
-		if (start) {
-			var end = start;
-			while (end.next) {
-				end = end.next;
-			}
-			end.next = implicitReturn;
-		} else {
-			initFeature.start = implicitReturn;
-		}
+		parser.ensureTerminated(start);
 		parser.setParent(start, initFeature);
 		return initFeature;
 	});
@@ -4319,6 +4380,7 @@ var _runtime = (function () {
 				return runtime.findNext(this, context);
 			},
 		};
+		parser.setParent(body, command);
 		return command;
 	});
 
@@ -4461,7 +4523,7 @@ var _runtime = (function () {
 			var separator = tokens.matchOpToken(".") || tokens.matchOpToken(":");
 			if (separator) {
 				do {
-					path.push(tokens.requireTokenType("IDENTIFIER").value);
+					path.push(tokens.requireTokenType("IDENTIFIER", "NUMBER").value);
 				} while (tokens.matchOpToken(separator.value));
 			}
 
@@ -4495,17 +4557,18 @@ var _runtime = (function () {
 		var details = parser.parseElement("namedArgumentList", tokens);
 		if ((cmdType === "send" && tokens.matchToken("to")) ||
 			(cmdType === "trigger" && tokens.matchToken("on"))) {
-			var to = parser.requireElement("expression", tokens);
+			var toExpr = parser.requireElement("expression", tokens);
 		} else {
-			var to = parser.requireElement("implicitMeTarget", tokens);
+			var toExpr = parser.requireElement("implicitMeTarget", tokens);
 		}
 
 		var sendCmd = {
 			eventName: eventName,
 			details: details,
-			to: to,
-			args: [to, eventName, details],
+			to: toExpr,
+			args: [toExpr, eventName, details],
 			op: function (context, to, eventName, details) {
+				runtime.nullCheck(to, toExpr);
 				runtime.forEach(to, function (target) {
 					runtime.triggerEvent(target, eventName, details ? details : {});
 				});
@@ -4542,15 +4605,13 @@ var _runtime = (function () {
 			op: function (context, value) {
 				var resolve = context.meta.resolve;
 				context.meta.returned = true;
+				context.meta.returnValue = value;
 				if (resolve) {
 					if (value) {
 						resolve(value);
 					} else {
 						resolve();
 					}
-				} else {
-					context.meta.returned = true;
-					context.meta.returnValue = value;
 				}
 				return runtime.HALT;
 			},
@@ -4647,13 +4708,7 @@ var _runtime = (function () {
 			args: [expr],
 			op: function (ctx, expr) {
 				runtime.registerHyperTrace(ctx, expr);
-				var reject = ctx.meta && ctx.meta.reject;
-				if (reject) {
-					reject(expr);
-					return runtime.HALT;
-				} else {
-					throw expr;
-				}
+				throw expr;
 			},
 		};
 		return throwCmd;
@@ -4806,17 +4861,17 @@ var _runtime = (function () {
 			parser.raiseParseError(tokens, "Can only put directly into symbols, not references");
 		}
 
-		var root = null;
+		var rootElt = null;
 		var prop = null;
 		if (symbolWrite) {
-			// root is null
+			// rootElt is null
 		} else if (attributeWrite) {
-			root = parser.requireElement("implicitMeTarget", tokens);
+			rootElt = parser.requireElement("implicitMeTarget", tokens);
 			var attribute = target;
 		} else {
 			prop = target.prop ? target.prop.value : null;
 			var attribute = target.attribute;
-			root = target.root;
+			rootElt = target.root;
 		}
 
 		/** @type {GrammarElement} */
@@ -4824,11 +4879,12 @@ var _runtime = (function () {
 			target: target,
 			symbolWrite: symbolWrite,
 			value: value,
-			args: [root, value],
+			args: [rootElt, value],
 			op: function (context, root, valueToSet) {
 				if (symbolWrite) {
 					runtime.setSymbol(target.name, context, target.scope, valueToSet);
 				} else {
+					runtime.nullCheck(root, rootElt);
 					runtime.implicitLoop(root, function (elt) {
 						if (attribute) {
 							if (valueToSet == null) {
@@ -4959,12 +5015,15 @@ var _runtime = (function () {
 			} else {
 				var whileExpr = parser.requireElement("expression", tokens);
 			}
-		} else if (tokens.matchTokenType("NUMBER")) {
-			var times = parseFloat(innerStartToken.value);
-			tokens.requireToken("times");
 		} else {
-			tokens.matchToken("forever"); // consume optional forever
-			var forever = true;
+			if (!parser.commandBoundary(tokens.currentToken()) &&
+			    tokens.currentToken().value !== 'forever') {
+				var times = parser.requireElement("expression", tokens);
+				tokens.requireToken("times");
+			} else {
+				tokens.matchToken("forever"); // consume optional forever
+				var forever = true;
+			}
 		}
 
 		if (tokens.matchToken("index")) {
@@ -5018,8 +5077,8 @@ var _runtime = (function () {
 				return this;
 			},
 			loop: loop,
-			args: [whileExpr],
-			op: function (context, whileValue) {
+			args: [whileExpr, times],
+			op: function (context, whileValue, times) {
 				var iteratorInfo = context.meta.iterators[slot];
 				var keepLooping = false;
 				var loopVal = null;
@@ -5034,7 +5093,7 @@ var _runtime = (function () {
 				} else if (whileExpr) {
 					keepLooping = whileValue;
 				} else if (times) {
-					keepLooping = iteratorInfo.index < this.times;
+					keepLooping = iteratorInfo.index < times;
 				} else {
 					var nextValFromIterator = iteratorInfo.iterator.next();
 					keepLooping = !nextValFromIterator.done;
@@ -5132,48 +5191,55 @@ var _runtime = (function () {
 
 	_parser.addCommand("append", function (parser, runtime, tokens) {
 		if (!tokens.matchToken("append")) return;
-		var target = null;
-		var prop = null;
+		var targetExpr = null;
 
 		var value = parser.requireElement("expression", tokens);
 
+		var implicitResultSymbol = {
+			type: "symbol",
+			evaluate: function (context) {
+				return runtime.resolveSymbol("result", context);
+			},
+		};
+
 		if (tokens.matchToken("to")) {
-			target = parser.requireElement("expression", tokens);
+			targetExpr = parser.requireElement("expression", tokens);
+		} else {
+			targetExpr = implicitResultSymbol;
 		}
 
-		if (target == null) {
-			prop = "result";
-		} else if (target.type === "symbol") {
-			prop = target.name;
-		} else if (target.type === "propertyAccess") {
-			prop = target.prop.value;
-		} else {
-			throw "Unable to append to " + target.type;
+		var setter = null;
+		if (targetExpr.type === "symbol" || targetExpr.type === "attributeRef" || targetExpr.root != null) {
+			setter = makeSetter(parser, runtime, tokens, targetExpr, implicitResultSymbol);
 		}
 
 		var command = {
 			value: value,
-			target: target,
-			args: [value],
-			op: function (context, value) {
-				if (Array.isArray(context[prop])) {
-					context[prop].push(value);
-				} else if (context[prop] instanceof Element) {
-					if (typeof value == "string") {
-						context[prop].innerHTML += value;
-					} else {
-						throw "Don't know how to append non-strings to an HTML Element yet.";
-					}
+			target: targetExpr,
+			args: [targetExpr, value],
+			op: function (context, target, value) {
+				if (Array.isArray(target)) {
+					target.push(value);
+					return runtime.findNext(this, context);
+				} else if (target instanceof Element) {
+					target.innerHTML += value;
+					return runtime.findNext(this, context);
+				} else if(setter) {
+					context.result = (target || "") + value;
+					return setter;
 				} else {
-					context[prop] += value;
+					throw Error("Unable to append a value!")
 				}
-
-				return runtime.findNext(this, context);
 			},
 			execute: function (context) {
 				return runtime.unifiedExec(this, context/*, value, target*/);
 			},
 		};
+
+		if (setter != null) {
+			setter.parent = command;
+		}
+
 		return command;
 	});
 
@@ -5189,23 +5255,23 @@ var _runtime = (function () {
 			amount = parser.requireElement("expression", tokens);
 		}
 
-		var command = {
+		var implicitIncrementOp = {
+			type: "implicitIncrementOp",
 			target: target,
 			args: [target, amount],
 			op: function (context, targetValue, amount) {
 				targetValue = targetValue ? parseFloat(targetValue) : 0;
 				amount = amount ? parseFloat(amount) : 1;
 				var newValue = targetValue + amount;
-				var setter = makeSetter(parser, runtime, tokens, target, newValue);
 				context.result = newValue;
-				setter.parent = this;
-				return setter;
+				return newValue;
 			},
-			execute: function (context) {
-				return runtime.unifiedExec(this, context/* , target, amount */);
-			},
+			evaluate: function (context) {
+				return runtime.unifiedEval(this, context);
+			}
 		};
-		return command;
+
+		return makeSetter(parser, runtime, tokens, target, implicitIncrementOp);
 	});
 
 	_parser.addCommand("decrement", function (parser, runtime, tokens) {
@@ -5220,31 +5286,66 @@ var _runtime = (function () {
 			amount = parser.requireElement("expression", tokens);
 		}
 
-		var command = {
+		var implicitDecrementOp = {
+			type: "implicitDecrementOp",
 			target: target,
 			args: [target, amount],
 			op: function (context, targetValue, amount) {
 				targetValue = targetValue ? parseFloat(targetValue) : 0;
 				amount = amount ? parseFloat(amount) : 1;
 				var newValue = targetValue - amount;
-				var setter = makeSetter(parser, runtime, tokens, target, newValue);
 				context.result = newValue;
-				setter.parent = this;
-				return setter;
+				return newValue;
 			},
-			execute: function (context) {
-				return runtime.unifiedExec(this, context/*, target, amount*/);
+			evaluate: function (context) {
+				return runtime.unifiedEval(this, context);
+			}
+		};
+
+		return makeSetter(parser, runtime, tokens, target, implicitDecrementOp);
+	});
+
+	_parser.addGrammarElement("fetchArgumentList", function (parser, runtime, tokens) {
+		var fields = [];
+		var valueExpressions = [];
+		if (tokens.currentToken().type === "IDENTIFIER") {
+			do {
+				var name = tokens.requireTokenType("IDENTIFIER");
+				tokens.requireOpToken(":");
+				if (name.value === "timeout") {
+					var value = parser.requireElement("timeExpression", tokens);
+				} else {
+					var value = parser.requireElement("expression", tokens);
+				}
+				valueExpressions.push(value);
+				fields.push({ name: name, value: value });
+			} while (tokens.matchOpToken(","));
+		}
+		return {
+			type: "fetchArgumentList",
+			fields: fields,
+			args: [valueExpressions],
+			op: function (context, values) {
+				var returnVal = { _namedArgList_: true };
+				for (var i = 0; i < values.length; i++) {
+					var field = fields[i];
+					returnVal[field.name.value] = values[i];
+				}
+				return returnVal;
+			},
+			evaluate: function (context) {
+				return runtime.unifiedEval(this, context);
 			},
 		};
-		return command;
 	});
+
 
 	_parser.addCommand("fetch", function (parser, runtime, tokens) {
 		if (!tokens.matchToken("fetch")) return;
 		var url = parser.requireElement("stringLike", tokens);
 
 		if (tokens.matchToken("with")) {
-			var args = parser.parseElement("nakedNamedArgumentList", tokens);
+			var args = parser.parseElement("fetchArgumentList", tokens);
 		} else {
 			var args = parser.parseElement("objectLiteral", tokens);
 		}
@@ -5274,17 +5375,40 @@ var _runtime = (function () {
 			op: function (context, url, args) {
 				var detail = args || {};
 				detail["sentBy"] = context.me;
+				detail["headers"] = detail["headers"] || {}
+				var abortController = new AbortController();
+				let abortListener = context.me.addEventListener('fetch:abort', function(){
+					abortController.abort();
+				}, {once: true});
+				detail['signal'] = abortController.signal;
 				runtime.triggerEvent(context.me, "hyperscript:beforeFetch", detail);
+				runtime.triggerEvent(context.me, "fetch:beforeRequest", detail);
 				args = detail;
+				var finished = false;
+				if (args.timeout) {
+					setTimeout(function () {
+						if (!finished) {
+							abortController.abort();
+						}
+					}, args.timeout);
+				}
 				return fetch(url, args)
 					.then(function (resp) {
+						let resultDetails = {response:resp};
+						runtime.triggerEvent(context.me, "fetch:afterResponse", resultDetails);
+						resp = resultDetails.response;
+
 						if (type === "response") {
 							context.result = resp;
+							runtime.triggerEvent(context.me, "fetch:afterRequest", {result:resp});
+							finished = true;
 							return runtime.findNext(fetchCmd, context);
 						}
 						if (type === "json") {
 							return resp.json().then(function (result) {
 								context.result = result;
+								runtime.triggerEvent(context.me, "fetch:afterRequest", {result});
+								finished = true;
 								return runtime.findNext(fetchCmd, context);
 							});
 						}
@@ -5294,6 +5418,8 @@ var _runtime = (function () {
 							if (type === "html") result = runtime.convertValue(result, "Fragment");
 
 							context.result = result;
+							runtime.triggerEvent(context.me, "fetch:afterRequest", {result});
+							finished = true;
 							return runtime.findNext(fetchCmd, context);
 						});
 					})
@@ -5302,6 +5428,8 @@ var _runtime = (function () {
 							reason: reason,
 						});
 						throw reason;
+					}).finally(function(){
+						context.me.removeEventListener('fetch:abort', abortListener);
 					});
 			},
 		};
