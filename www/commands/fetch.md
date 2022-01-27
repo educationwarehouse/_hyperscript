@@ -4,7 +4,7 @@
 ### Syntax
 
 ```ebnf
-fetch <stringLike> [<object literal> | 'with' <naked named arguments>] [ as [ a | an ]( json | Object | text | request ) ]
+fetch <stringLike> [ as [ a | an ]( json | Object | text | request ) ] [<object literal> | 'with' <naked named arguments>]
 ```
 
 ### Description
@@ -55,6 +55,15 @@ To cancel a fetch request, send a `fetch:abort` event to the element that trigge
 </div>
 ```
 
+### Dynamic URLs with Template Literals
+
+If you need to fetch from a dynamically-generated URL, just use a [template literal string](/expressions/string/) (the ones with the backticks) as the URL.  For example:
+
+```hyperscript
+set userId to my [@data-userId]
+fetch `/users/${userId}/profile` as JSON
+```
+
 ### Events
 
 The `fetch` command features a few events that can be listened to (using hyperscript or javascript) to do things
@@ -91,7 +100,7 @@ document.body.addEventListener('fetch:beforeRequest', (event) => {
   Get from /example!
 </button>
 
-<button _='on click fetch /test with method:"POST" as json
+<button _='on click fetch /test as json with method:"POST"
                     put `${its result}` into my innerHTML'>
   Post to /test!
 </button>
@@ -102,7 +111,7 @@ document.body.addEventListener('fetch:beforeRequest', (event) => {
   Get the title of the page!
 </button>
 
-<div _='on click fetch /number with method:"POST" as Number
+<div _='on click fetch /number as Number with method:"POST"
                  put "${the result + 1}" into my innerHTML'>
   Increment!
 </div>

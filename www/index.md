@@ -1,7 +1,7 @@
 
 <header id="intro-to-hyperscript">
 
-# hyperscript is an easy and approachable language designed for modern front-end web development
+# hyperscript is an easy & approachable language designed for modern front-end web development
 
 <div id="sample">
 
@@ -10,8 +10,8 @@
     repeat until event mouseleave
       transition #sample-tip's transform to 'translateX(-2ch)' using 'all 500ms ease-out'
       transition #sample-tip's transform to initial            using 'all 500ms ease-in'
-"><code id="snippet" class="lang-hyperscript">writeText(#snippet's innerText)
-  on navigator.clipboard
+"><code id="snippet" class="lang-hyperscript">writeText(the #snippet's innerText)
+  into the navigator's clipboard
 put 'copied!' into me
 wait 1s
 put 'copy' into me</code></pre>
@@ -19,7 +19,7 @@ put 'copy' into me</code></pre>
 <p style="text-align: right">
 <span id="sample-tip">see it in action &rarr;</span>
 <button class="btn primary" style="margin: auto" _="on click
-writeText(#snippet's innerText) on navigator.clipboard
+writeText(the #snippet's innerText) into the navigator's clipboard
 put 'copied!' into me
 wait 1s
 put 'copy' into me">
@@ -30,10 +30,12 @@ copy
 </header>
 
  <span class="lede">hyperscript makes writing event handlers and highly
-responsive user interfaces trivial with native language support for async
-behavior&mdash;easier than callbacks, promises, even async/await.</span>
+responsive user interfaces easy with a clear, DOM-oriented syntax and by transparently
+ handling asynchronous behavior for you &mdash; easier than callbacks, promises, even async/await.</span>
 
-<div id="features">
+## features
+
+<div id="features-list">
 
 **Events as first class citizens in the language**&mdash;clean syntax for
 [receiving](/features/on) and [sending](/commands/send) events, as well as
@@ -51,19 +53,20 @@ experiences without callback hell
 
 **[Debugger](/docs#debugging)** to step through hyperscript code
 
-**Inspired by [HyperTalk](https://hypercard.org/HyperTalk%20Reference%202.4.pdf)**
-  (not AppleScript)
+**An [xTalk](https://en.wikipedia.org/wiki/XTalk) syntax, inspired by [HyperTalk](https://hypercard.org/HyperTalk%20Reference%202.4.pdf)**
+
 
 </div>
 
 <div id="links">
 
 [Companion of **htmx**](https://htmx.org) |
-[**Comparison** with vanilla JS and jQuery](/comparison) |
+[**Comparison** with VanillaJS & jQuery](/comparison) |
 [Read the **docs**](/docs) |
 [Try it on the **playground**](/playground)
-<span id='install'>Install: `<script src="https://unpkg.com/hyperscript.org@0.9.3"></script>`
-<button style="font:inherit; background: none; border: none; color: #3465a4"
+
+ <span id='install'>Install: `<script src="https://unpkg.com/hyperscript.org@0.9.4"></script>`
+<button style="font:inherit;font-size:.8em;background:#3465a4;color:white;border:none;padding: 0 .4em; border-radius: .4em"
   _="on click
   writeText(my previousElementSibling's innerText) on navigator.clipboard
   put 'copied!' into me
@@ -84,8 +87,8 @@ as we push to 1.0! Thank you!</p>
 </small>
 
  <small><em>NB: because hyperscript relies on
-[promises](https://caniuse.com/?search=Promise), it does not strive for IE11
-compatibility, unlike htmx.</em></small>
+[promises](https://caniuse.com/?search=Promise) it cannot offer IE11
+compatibility</em></small>
 
 <style>
 #intro-to-hyperscript {
@@ -115,12 +118,12 @@ compatibility, unlike htmx.</em></small>
 	font-size: clamp(1.1em, 2vw, 1.2em);
 }
 
-#features {
+#features-list {
   column-width: 40ch;
   column-gap: 2em;
 }
 
-#features > * {
+#features-list > * {
   margin: 0 0 1.4em 0;
 }
 
@@ -133,43 +136,29 @@ compatibility, unlike htmx.</em></small>
   gap: .2em 2ch;
 }
 
-.example {
-  margin: .5em auto;
-  text-align: center;
-}
 </style>
 
 ## examples
 
-```html
+{% example %}
 <button _="on click toggle .big-text">
   Toggle the "big-text" class on me on click
 </button>
-```
+{% endexample %}
 
-<div class="example">
 <style>
-button {
-  transition: all 300ms ease-in;
-}
 button.big-text {
   font-size: 2em;
 }
 </style>
-<button class="btn primary" _="on click toggle .big-text">
-  Toggle .clicked
-</button>
-</div>
 
-```html
+{% example %}
 <div _="on mouseenter toggle .visible on #help until mouseleave">
   Mouse Over Me!
 </div>
 <div id="help"> I'm a helpful message!</div>
+{% endexample %}
 
-```
-
-<div class="example">
 <style>
 #help {
   opacity: 0;
@@ -179,22 +168,12 @@ button.big-text {
   transition: opacity 200ms ease-in;
 }
 </style>
-<div _="on mouseenter toggle .visible on #help until mouseleave">
-  Mouse Over Me!
-</div>
-<div id="help"> I'm a helpful message!</div>
-</div>
 
-```html
-<button _="on click log me then call alert('yep, it’s an alert')">
+{% example %}
+<button _="on click
+             call alert('OK, Going to put the current date into the output!')
+             make a Date then put it into the next <output/>">
   Show An Alert
 </button>
-```
-
-<div class="example">
-<button class="btn primary" _="
-  on click
-    log me then call alert('yep, it\'s an alert - check the console...')">
-  Show An Alert
-</button>
-</div>
+<output>--</output>
+{% endexample %}

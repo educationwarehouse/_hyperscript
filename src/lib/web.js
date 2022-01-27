@@ -88,7 +88,7 @@ export default _hyperscript => {
 			if (tokens.matchToken("to")) {
 				var toExpr = parser.requireElement("expression", tokens);
 			} else {
-				var toExpr = parser.parseElement("implicitMeTarget", tokens);
+				var toExpr = parser.requireElement("implicitMeTarget", tokens);
 			}
 
 			if (classRefs) {
@@ -262,7 +262,23 @@ export default _hyperscript => {
 
 	_hyperscript.addCommand("toggle", function (parser, runtime, tokens) {
 		if (tokens.matchToken("toggle")) {
-			if (tokens.matchToken("between")) {
+			tokens.matchAnyToken("the", "my");
+			if (tokens.currentToken().type === "STYLE_REF") {
+				let styleRef = tokens.consumeToken();
+				var name = styleRef.value.substr(1);
+				var visibility = true;
+				var hideShowStrategy = resolveStrategy(parser, tokens, name);
+				if (tokens.matchToken("of")) {
+					tokens.pushFollow("with");
+					try {
+						var onExpr = parser.requireElement("expression", tokens);
+					} finally {
+						tokens.popFollow();
+					}
+				} else {
+					var onExpr = parser.requireElement("implicitMeTarget", tokens);
+				}
+			} else if (tokens.matchToken("between")) {
 				var between = true;
 				var classRef = parser.parseElement("classRef", tokens);
 				tokens.requireToken("and");
@@ -283,14 +299,16 @@ export default _hyperscript => {
 				}
 			}
 
-			if (tokens.matchToken("on")) {
-				var onExpr = parser.requireElement("expression", tokens);
-			} else {
-				var onExpr = parser.requireElement("implicitMeTarget", tokens);
+			if (visibility !== true) {
+				if (tokens.matchToken("on")) {
+					var onExpr = parser.requireElement("expression", tokens);
+				} else {
+					var onExpr = parser.requireElement("implicitMeTarget", tokens);
+				}
 			}
 
 			if (tokens.matchToken("for")) {
-				var time = parser.requireElement("timeExpression", tokens);
+				var time = parser.requireElement("expression", tokens);
 			} else if (tokens.matchToken("until")) {
 				var evt = parser.requireElement("dotOrColonPath", tokens, "Expected event name");
 				if (tokens.matchToken("from")) {
@@ -309,7 +327,11 @@ export default _hyperscript => {
 				from: from,
 				toggle: function (on, classRef, classRef2, classRefs) {
 					runtime.nullCheck(on, onExpr);
-					if (between) {
+					if (visibility) {
+						runtime.implicitLoop(on, function (target) {
+							hideShowStrategy("toggle", target);
+						});
+					} else if (between) {
 						runtime.implicitLoop(on, function (target) {
 							if (target.classList.contains(classRef.className)) {
 								target.classList.remove(classRef.className);
@@ -372,6 +394,12 @@ export default _hyperscript => {
 		display: function (op, element, arg) {
 			if (arg) {
 				element.style.display = arg;
+			} else if (op === "toggle") {
+				if (getComputedStyle(element).display === "none") {
+					HIDE_SHOW_STRATEGIES.display("show", element, arg);
+				} else {
+					HIDE_SHOW_STRATEGIES.display("hide", element, arg);
+				}
 			} else if (op === "hide") {
 				const internalData = _hyperscript.internals.runtime.getInternalData(element);
 				if (internalData.originalDisplay == null) {
@@ -390,6 +418,12 @@ export default _hyperscript => {
 		visibility: function (op, element, arg) {
 			if (arg) {
 				element.style.visibility = arg;
+			} else if (op === "toggle") {
+				if (getComputedStyle(element).visibility === "hidden") {
+					HIDE_SHOW_STRATEGIES.visibility("show", element, arg);
+				} else {
+					HIDE_SHOW_STRATEGIES.visibility("hide", element, arg);
+				}
 			} else if (op === "hide") {
 				element.style.visibility = "hidden";
 			} else {
@@ -399,6 +433,12 @@ export default _hyperscript => {
 		opacity: function (op, element, arg) {
 			if (arg) {
 				element.style.opacity = arg;
+			} else if (op === "toggle") {
+				if (getComputedStyle(element).opacity === "0") {
+					HIDE_SHOW_STRATEGIES.opacity("show", element, arg);
+				} else {
+					HIDE_SHOW_STRATEGIES.opacity("hide", element, arg);
+				}
 			} else if (op === "hide") {
 				element.style.opacity = "0";
 			} else {
@@ -438,7 +478,10 @@ export default _hyperscript => {
 
 			var name = null;
 			if (tokens.matchToken("with")) {
-				name = tokens.requireTokenType("IDENTIFIER").value;
+				name = tokens.requireTokenType("IDENTIFIER", "STYLE_REF").value;
+				if (name.indexOf("*") === 0) {
+					name = name.substr(1);
+				}
 			}
 			var hideShowStrategy = resolveStrategy(parser, tokens, name);
 
@@ -462,7 +505,10 @@ export default _hyperscript => {
 
 			var name = null;
 			if (tokens.matchToken("with")) {
-				name = tokens.requireTokenType("IDENTIFIER").value;
+				name = tokens.requireTokenType("IDENTIFIER", "STYLE_REF").value;
+				if (name.indexOf("*") === 0) {
+					name = name.substr(1);
+				}
 			}
 			var arg = null;
 			if (tokens.matchOpToken(":")) {
@@ -509,7 +555,7 @@ export default _hyperscript => {
 
 	_hyperscript.addCommand("take", function (parser, runtime, tokens) {
 		if (tokens.matchToken("take")) {
-			var classRef = parser.parseElement("classRef", tokens);
+			var classRef = parser.requireElement("classRef", tokens);
 
 			if (tokens.matchToken("from")) {
 				var fromExpr = parser.requireElement("expression", tokens);
@@ -546,7 +592,7 @@ export default _hyperscript => {
 	});
 
 	function putInto(runtime, context, prop, valueToPut) {
-		if (prop) {
+		if (prop != null) {
 			var value = runtime.resolveSymbol(prop, context);
 		} else {
 			var value = context;
@@ -555,7 +601,7 @@ export default _hyperscript => {
 			while (value.firstChild) value.removeChild(value.firstChild);
 			value.append(_hyperscript.internals.runtime.convertValue(valueToPut, "Fragment"));
 		} else {
-			if (prop) {
+			if (prop != null) {
 				runtime.setSymbol(prop, context, null, valueToPut);
 			} else {
 				throw "Don't know how to put a value into " + typeof context;
@@ -582,10 +628,16 @@ export default _hyperscript => {
 
 			var operation = operationToken.value;
 
+			var arrayIndex = false;
 			var symbolWrite = false;
 			var rootExpr = null;
 			var prop = null;
-			if (target.prop && target.root && operation === "into") {
+
+			if (target.type === "arrayIndex" && operation === "into") {
+				arrayIndex = true;
+				prop = target.prop;
+				rootExpr = target.root;
+			}  else if (target.prop && target.root && operation === "into") {
 				prop = target.prop.value;
 				rootExpr = target.root;
 			} else if (target.type === "symbol" && operation === "into") {
@@ -595,8 +647,13 @@ export default _hyperscript => {
 				var attributeWrite = true;
 				prop = target.name;
 				rootExpr = parser.requireElement("implicitMeTarget", tokens);
+			} else if (target.type === "styleRef" && operation === "into") {
+				var styleWrite = true;
+				prop = target.name;
+				rootExpr = parser.requireElement("implicitMeTarget", tokens);
 			} else if (target.attribute && operation === "into") {
-				var attributeWrite = true;
+				var attributeWrite = target.attribute.type === "attributeRef";
+				var styleWrite = target.attribute.type === "styleRef";
 				prop = target.attribute.name;
 				rootExpr = target.root;
 			} else {
@@ -608,8 +665,8 @@ export default _hyperscript => {
 				operation: operation,
 				symbolWrite: symbolWrite,
 				value: value,
-				args: [rootExpr, value],
-				op: function (context, root, valueToPut) {
+				args: [rootExpr, prop, value],
+				op: function (context, root, prop, valueToPut) {
 					if (symbolWrite) {
 						putInto(runtime, context, prop, valueToPut);
 					} else {
@@ -619,6 +676,12 @@ export default _hyperscript => {
 								runtime.implicitLoop(root, function (elt) {
 									elt.setAttribute(prop, valueToPut);
 								});
+							} else if (styleWrite) {
+								runtime.implicitLoop(root, function (elt) {
+									elt.style[prop] = valueToPut;
+								});
+							} else if (arrayIndex) {
+								root[prop] = valueToPut;
 							} else {
 								runtime.implicitLoop(root, function (elt) {
 									putInto(runtime, elt, prop, valueToPut);
@@ -703,19 +766,39 @@ export default _hyperscript => {
 				currentToken.value !== "over" &&
 				currentToken.value !== "using"
 			) {
-				properties.push(parser.requireElement("stringLike", tokens));
+				if (tokens.currentToken().type === "STYLE_REF") {
+					let styleRef = tokens.consumeToken();
+					let styleProp = styleRef.value.substr(1);
+					properties.push({
+						type: "styleRefValue",
+						evaluate: function () {
+							return styleProp;
+						},
+					});
+				} else {
+					properties.push(parser.requireElement("stringLike", tokens));
+				}
 
 				if (tokens.matchToken("from")) {
-					from.push(parser.requireElement("stringLike", tokens));
+					from.push(parser.requireElement("expression", tokens));
 				} else {
 					from.push(null);
 				}
 				tokens.requireToken("to");
-				to.push(parser.requireElement("stringLike", tokens));
+				if (tokens.matchToken("initial")) {
+					to.push({
+						type: "initial_literal",
+						evaluate : function(){
+							return "initial";
+						}
+					});
+				} else {
+					to.push(parser.requireElement("expression", tokens));
+				}
 				currentToken = tokens.currentToken();
 			}
 			if (tokens.matchToken("over")) {
-				var over = parser.requireElement("timeExpression", tokens);
+				var over = parser.requireElement("expression", tokens);
 			} else if (tokens.matchToken("using")) {
 				var using = parser.requireElement("expression", tokens);
 			}
@@ -887,12 +970,12 @@ export default _hyperscript => {
 
 			var css = null;
 			if (tokens.currentToken().type === "ATTRIBUTE_REF") {
-				var attributeRef = parser.parseElement("attributeRefAccess", tokens, null);
+				var attributeRef = parser.requireElement("attributeRefAccess", tokens, null);
 				css = "[" + attributeRef.attribute.name + "]";
 			}
 
 			if (css == null) {
-				var expr = parser.parseElement("expression", tokens);
+				var expr = parser.requireElement("expression", tokens);
 				if (expr.css == null) {
 					parser.raiseParseError(tokens, "Expected a CSS expression");
 				} else {
@@ -1014,7 +1097,7 @@ export default _hyperscript => {
 							target.scrollIntoView(scrollOptions);
 						});
 					}
-					return runtime.findNext(goCmd);
+					return runtime.findNext(goCmd, ctx);
 				},
 			};
 			return goCmd;

@@ -77,24 +77,58 @@ describe("the set command", function () {
 		d2.innerHTML.should.equal("foo");
 	});
 
-	it("can set into property ref", function () {
+	it("can set into attribute ref", function () {
 		var d1 = make("<div class='divs' _='on click set @bar to \"foo\"'></div>");
 		d1.click();
 		d1.getAttribute("bar").should.equal("foo");
 	});
 
-	it("can set into indirect property ref", function () {
+	it("can set into indirect attribute ref", function () {
 		var d1 = make("<div class='divs' _=\"on click set #div2's @bar to 'foo'\"></div>");
 		var d2 = make("<div id='div2'></div>");
 		d1.click();
 		d2.getAttribute("bar").should.equal("foo");
 	});
 
-	it("can set into indirect property ref 2", function () {
+	it("can set into indirect attribute ref 2", function () {
 		var d1 = make("<div class='divs' _=\"on click set #div2's @bar to 'foo'\"></div>");
 		var d2 = make("<div id='div2'></div>");
 		d1.click();
 		d2.getAttribute("bar").should.equal("foo");
+	});
+
+	it("can set into indirect attribute ref 3", function () {
+		var d1 = make("<div class='divs' _=\"on click set @bar of #div2 to 'foo'\"></div>");
+		var d2 = make("<div id='div2'></div>");
+		d1.click();
+		d2.getAttribute("bar").should.equal("foo");
+	});
+
+	it("can set into style ref", function () {
+		var d1 = make("<div class='divs' _='on click set *color to \"red\"'></div>");
+		d1.click();
+		d1.style["color"].should.equal("red");
+	});
+
+	it("can set into indirect style ref", function () {
+		var d1 = make("<div class='divs' _=\"on click set #div2's *color to 'red'\"></div>");
+		var d2 = make("<div id='div2'></div>");
+		d1.click();
+		d2.style["color"].should.equal("red");
+	});
+
+	it("can set into indirect style ref 2", function () {
+		var d1 = make("<div class='divs' _=\"on click set #div2's *color to 'red'\"></div>");
+		var d2 = make("<div id='div2'></div>");
+		d1.click();
+		d2.style["color"].should.equal("red");
+	});
+
+	it("can set into indirect style ref 3", function () {
+		var d1 = make("<div class='divs' _=\"on click set *color of #div2 to 'red'\"></div>");
+		var d2 = make("<div id='div2'></div>");
+		d1.click();
+		d2.style["color"].should.equal("red");
 	});
 
 
@@ -125,4 +159,30 @@ describe("the set command", function () {
 		obj.should.deep.equal({ foo: 1, bar: 2, baz: 3 });
 		delete window.obj;
 	});
+
+	it("can set props w/ array access syntax", function () {
+		var d1 = make("<div _='on click set my style[\"color\"] to \"red\"'>lolwat</div>");
+		d1.click();
+		d1.style.color.should.equal("red");
+	});
+
+	it("can set props w/ array access syntax and var", function () {
+		var d1 = make("<div _='on click set foo to \"color\" then set my style[foo] to \"red\"'>lolwat</div>");
+		d1.click();
+		d1.style.color.should.equal("red");
+	});
+
+
+	it("can set arrays w/ array access syntax", function () {
+		var d1 = make("<div _='on click set arr to [1, 2, 3] set arr[0] to \"red\" set my *color to arr[0]'>lolwat</div>");
+		d1.click();
+		d1.style.color.should.equal("red");
+	});
+
+	it("can set arrays w/ array access syntax and var", function () {
+		var d1 = make("<div _='on click set arr to [1, 2, 3] set idx to 0 set arr[idx] to \"red\" set my *color to arr[0]'>lolwat</div>");
+		d1.click();
+		d1.style.color.should.equal("red");
+	});
+
 });
